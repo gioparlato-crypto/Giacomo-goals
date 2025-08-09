@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Gioco Giacomo - Platform</title>
+<style>
+  body {
+    margin: 0; 
+    background: linear-gradient(to bottom, #87CEEB 0%, #B0E0E6 100%);
+    overflow: hidden;
+    font-family: "Comic Sans MS", cursive, sans-serif;
+    user-select: none;
+  }
+  #gameCanvas {
+    display: block;
+    margin: auto;
+    background: #87CEEB;
+    border: 3px solid #000;
+    box-shadow: 0 0 15px rgba(0,0,0,0.3);
+  }
+  /* Nuvole semplici */
+  .cloud {
+    position: absolute;
+    background: white;
+    border-radius: 50%;
+    opacity: 0.8;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="gameCanvas" width="480" height="320"></canvas>
+
+<script>
+// Gioco Platform semplice con Giacomo e gli elementi richiesti
+
+(() => {
+  const canvas = document.getElementById("gameCanvas");
+  const ctx = canvas.getContext("2d");
+  const width = canvas.width;
+  const height = canvas.height;
+
+  // Caratteristiche personaggi e oggetti
+  const gravity = 0.8;
+  let gameOver = false;
+  let lives = 3;
+  let bananasCollected = 0;
+  let message = "";
+
+  // Suoni base
+  const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+
+  function playBeep(freq, duration = 200) {
+    const osc = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+    osc.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+    osc.frequency.value = freq;
+    osc.type = "square";
+    osc.start();
+    gainNode.gain.setValueAtTime(0.2, audioContext.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + duration / 1000);
+    osc.stop(audioContext.currentTime + duration / 1000);
+  }
+
+  // Suono bacio (più basso e corto)
+  function playKiss() {
+    playBeep(450, 150);
+  }
+  // Suono banana (più alto)
+  function playBanana() {
+    playBeep(700, 200);
+  }
+  // Suono yeah (vincita)
+  function playYeah() {
+    playBeep(900, 400);
+  }
+
+  // Player (Giacomo)
+  const player = {
+    x: 50,
+    y: height - 90,
+    width: 30,
+    height: 60,
+    vy: 0,
+    jumping: false,
+    color: "#000",
+    draw() {
+      // corpo semplice stilizzato
+      ctx.fillStyle = this.color;
+      // testa calva (cerchio)
+      ctx.beginPath();
+      ctx.arc(this.x + this.width/2, this.y + 15, 15, 0, Math.PI * 2);
+      ctx.fillStyle = "#f0c8a0";
+      ctx.fill();
+      // corpo magro (rettangolo)
+      ctx.fillStyle = "#000";
+      ctx.fillRect(this.x + 10, this.y + 30, 10, 30);
+    },
+    update() {
+      this.vy += gravity;
+      this.y += this.vy;
+      if (this.y + this.height > height - 20) { // terreno
+        this.y = height - 20 - this.height;
+        this.vy = 0;
+        this.jumping = false;
+      }
+    },
+    jump() {
+      if (!this.jumping) {
+        this.vy = -15;
+        this.jumping = true;
+      }
+    },
+    getRect() {
+      return {x: this.x, y: this.y, width: this.width, height: this.height};
+    }
+  };
+
+  // Nemici: bollette e tasse (persone che chiedono soldi)
+  class Enemy {
+    constructor(x, y, text) {
+      this.x = x;
+      this.y = y;
+      this.width = 40;
+      this.height = 50;
+      this.speed = 2;
+      this.text = text;
+      this.color = "#c0392b";
+    }
+    draw() {
+      ctx.fillStyle = this.color;
+      ctx.fillRect(this.x, this.y, this.width, this.height);
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 12px Comic Sans MS";
+      ctx.fillText(this.text, this.x + 5, this.y + 30);
+    }
+    update() {
+      this.x -= this.speed;
+      if (this.x + this.width < 0) {
+        this.x = width + Math.random() * 200;
+      }
+    }
+    getRect() {
+      return {x: this.x, y: this.y, width: this.width, height: this.height};
+    }
+  }
+
+  // Orologi da schivare (perde vite se li tocca)
+  class Clock {
+    constructor(x, y) {
+      this.x = x;
+      this.y = y;
+      this.width = 30;
+      this.height = 30;
+      this.speed = 3;
+      this.color = "#2980b9";
+    }
+    draw() {
+      ctx.fillStyle = this.color;
+      ctx.beginPath();
+      ctx.arc(this.x + this.width/2, this.y + this.height/2, 15, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.font = "16px Comic Sans MS";
+      ctx.fillText("⏰", this.x + 7, this.y + 22);
+    }
+    update() {
+      this.x -= this.speed;
+      if (this.x + this.width < 0) {
+        this.x = width + Math.random() * 300;
+        this.y = 50 + Math.random() * (height - 100);
+      }
+    }
+    getRect() {
+      return {x: this.x, y: this.y, width: this.width, height: this.height};
+    }
+  }
+
+  // Banane da raccogliere per vite
+  class Banana {
+    constructor(x, y) {
+      this.x = x;
+      this.y = y;
+      this.width = 20;
+      this.height = 30;
+      this.collected = false;
+      this.color = "#f1c40f";
+    }
+    draw() {
+      if (this.collected) return;
+      ctx.fillStyle = this.color;
+      ctx.beginPath();
+      ctx.moveTo(this.x, this.y + 15);
+      ctx.quadraticCurveTo(this.x + 10, this.y - 5, this.x + 20, this.y + 15);
+      ctx.quadraticCurveTo(this.x + 10, this.y + 35, this.x, this.y + 15);
+      ctx.fill();
+      ctx.strokeStyle = "#b7950b";
+      ctx.stroke();
+    }
+    getRect() {
+      return {x: this.x, y: this.y, width: this.width, height: this.height};
+    }
+  }
+
+  // Ragazza castana con cuore (dà potere extra)
+  class Girl {
+    constructor(x, y) {
+      this.x = x;
+      this.y = y;
+      this.width = 30;
+      this.height = 60;
+      this.collected = false;
+    }
+    draw() {
+      if (this.collected) return;
+      // capelli lunghi castani
+      ctx.fillStyle = "#5d3a1a";
+      ctx.beginPath();
+      ctx.ellipse(this.x + this.width/2, this.y + 25, 12, 25, 0, 0, Math.PI*2);
+      ctx.fill();
+      // corpo rosa
+      ctx.fillStyle = "#d24d57";
+      ctx.fillRect(this.x + 10, this.y + 30, 10, 30);
+      // cuore sopra
+      ctx.fillStyle = "red";
+      ctx.font = "20px Comic Sans MS";
+      ctx.fillText("❤️", this.x + 5, this.y + 20);
+    }
+    getRect() {
+      return {x: this.x, y: this.y, width: this.width, height: this.height};
+    }
+  }
+
+  // Tavola da surf (obiettivo finale)
+  class Surfboard {
+    constructor(x, y) {
+      this.x = x;
+      this.y = y;
+      this.width = 60;
+      this.height = 20;
+      this.collected = false;
+    }
+    draw() {
+      if (this.collected) return;
+      ctx.fillStyle = "#27ae60";
+      ctx.beginPath();
+      ctx.moveTo(this.x, this.y + 10);
+      ctx.quadraticCurveTo(this.x + 30, this.y - 15, this.x + 60, this.y + 10);
+      ctx.quadraticCurveTo(this.x + 30, this.y + 35, this.x, this.y + 10);
+      ctx.fill();
+    }
+    getRect() {
+      return {x: this.x, y: this.y, width: this.width, height: this.height};
+    }
+  }
+
+  // Funzione di collisione rettangolare semplice
+  function rectsCollide(r1, r2) {
+    return !(
+      r2.x > r1.x + r1.width ||
+      r2.x + r2.width < r1.x ||
+      r2.y > r1.y + r1.height ||
+      r2.y + r2.height < r1.y
+    );
+  }
+
+  // Creazione elementi di gioco
+  const enemies = [
+    new Enemy(500, height - 70, "Bollette"),
+    new Enemy(700, height - 70, "Tasse"),
+    new Enemy(900, height - 70, "Lavoro"),
+  ];
+  const clocks = [
+    new Clock(600, 50),
+    new Clock(850, 100)
+  ];
+  const bananas = [
+    new Banana(150, height - 50),
+    new Banana(400, height - 50),
+    new Banana(650, height - 50),
+  ];
+  const girl = new Girl(1100, height - 90);
+  const surfboard = new Surfboard(1300, height - 40);
+
+  // Disegna il terreno semplice
+  function drawGround() {
+    ctx.fillStyle = "#2ecc71";
+    ctx.fillRect(0, height - 20, width, 20);
+  }
+
+  // Messaggi di testo
+  function drawMessage() {
+    ctx.fillStyle = "black";
+    ctx.font = "20px Comic Sans MS";
+    ctx.textAlign = "center";
+    ctx.fillText(message, width / 2, 50);
+    ctx.textAlign = "left";
+  }
+
+  // Disegno e aggiornamento tutto
+  function gameLoop() {
+    ctx.clearRect(0, 0, width, height);
+
+    drawGround();
+
+    player.update();
+    player.draw();
+
+    enemies.forEach(e => {
+      e.update();
+      e.draw();
+      if (!gameOver && rectsCollide(player.getRect(), e.getRect())) {
+        gameOver = true;
+        message = "Game over: ti è finita una banana tra le chiappe!";
+      }
+    });
+
+    clocks.forEach(c => {
+      c.update();
+      c.draw();
+      if (!gameOver && rectsCollide(player.getRect(), c.getRect())) {
+        lives--;
+        playBanana(); // suono perdita vita
+        if (lives <= 0) {
+          gameOver = true;
+          message = "Game over: ti è finita una banana tra le chiappe!";
+        }
+      }
+    });
+
+    bananas.forEach(b => {
+      b.draw();
+      if (!b.collected && !gameOver && rectsCollide(player.getRect(), b.getRect())) {
+        b.collected = true;
+        lives++;
+        bananasCollected++;
+        playBanana();
+      }
+    });
+
+    if (!girl.collected && !gameOver && rectsCollide(player.getRect(), girl.getRect())) {
+      girl.collected = true;
+      playKiss();
+      message = "Hai preso un bacio! Potere extra attivato!";
+    }
+
+    if (!surfboard.collected && !gameOver && rectsCollide(player.getRect(), surfboard.getRect())) {
+      surfboard.collected = true;
+      playYeah();
+      message = "Sei arrivato alla spiaggia! Surfa!";
+      gameOver = true;
+    }
+
+    drawMessage();
+
+    // Vite (banane raccolte)
+    ctx.fillStyle = "#f1c40f";
+    ctx.font = "16px Comic Sans MS";
+    ctx.fillText(`Vite: ${lives}`, 10, 25);
+
+    if (!gameOver) requestAnimationFrame(gameLoop);
+  }
+
+  // Reset gioco
+  function resetGame() {
+    lives = 3;
+    bananasCollected = 0;
+    message = "";
+    gameOver = false;
+
+    bananas.forEach(b => b.collected = false);
+    girl.collected = false;
+    surfboard.collected = false;
+
+    enemies.forEach(e => e.x = width + Math.random() * 300);
+    clocks.forEach(c => {
+      c.x = width + Math.random() * 300;
+      c.y = 50 + Math.random() * (height - 100);
+    });
+
+    player.x = 50;
+    player.y = height - 90;
+    player.vy = 0;
+    player.jumping = false;
+
+    gameLoop();
+  }
+
+  // Controllo touch per saltare o restart
+  canvas.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    if (!gameOver) player.jump();
+    else resetGame();
+  });
+
+  resetGame();
+
+})();
+</script>
+
+</body>
+</html>
