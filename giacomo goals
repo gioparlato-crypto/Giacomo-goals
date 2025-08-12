@@ -1,403 +1,508 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="it">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Gioco Giacomo - Platform</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Giacomo - Demo (interno)</title>
 <style>
-  body {
-    margin: 0; 
-    background: linear-gradient(to bottom, #87CEEB 0%, #B0E0E6 100%);
-    overflow: hidden;
-    font-family: "Comic Sans MS", cursive, sans-serif;
-    user-select: none;
+  :root{
+    --bg1:#cfefff; --bg2:#eaf9ff; --panel: rgba(255,255,255,0.92);
+    --accent:#ffd54f; --danger:#ff6b6b; --text:#123;
   }
-  #gameCanvas {
-    display: block;
-    margin: auto;
-    background: #87CEEB;
-    border: 3px solid #000;
-    box-shadow: 0 0 15px rgba(0,0,0,0.3);
-  }
-  /* Nuvole semplici */
-  .cloud {
-    position: absolute;
-    background: white;
-    border-radius: 50%;
-    opacity: 0.8;
-  }
+  html,body{height:100%;margin:0;font-family:Inter,Arial,Helvetica,sans-serif;background:linear-gradient(180,var(--bg1),var(--bg2))}
+  #container{max-width:420px;margin:10px auto;height:88vh; border-radius:14px; overflow:hidden; box-shadow:0 10px 30px rgba(0,0,0,.18); background:linear-gradient(#e8fbff,#f7ffff)}
+  canvas{width:100%;height:100%;display:block;background:transparent}
+  /* UI */
+  .topbar{position: absolute; left: 10px; top: 10px; right: 10px; display:flex; justify-content:space-between; gap:8px; z-index:40; pointer-events:none}
+  .stat{background:var(--panel); padding:6px 10px; border-radius:10px; font-weight:700; color:var(--text); box-shadow:0 6px 14px rgba(0,0,0,.08)}
+  .controls{position:absolute; left:10px; bottom:12px; background:var(--panel); padding:8px 10px; border-radius:10px; font-size:13px; z-index:40}
+  .touch{position:absolute; right:12px; bottom:12px; display:flex; gap:8px; z-index:40}
+  .btn{width:64px;height:64px;border-radius:12px;background:rgba(255,255,255,0.95);display:flex;align-items:center;justify-content:center;font-size:22px;box-shadow:0 4px 12px rgba(0,0,0,.12);user-select:none;touch-action:none}
+  /* overlays */
+  .overlay{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; z-index:50; background:rgba(0,0,0,0.25)}
+  .panel{background:var(--panel); padding:18px; border-radius:12px; text-align:center; box-shadow:0 10px 30px rgba(0,0,0,.15)}
+  .title{font-weight:900;color:#d64040;margin-bottom:8px;font-size:20px}
+  .big{padding:10px 18px;border-radius:10px;border:0;background:#ff7f50;color:white;font-weight:900; font-size:15px}
+  .small{font-size:13px;color:#235}
+  @media (max-width:420px){ #container{height:94vh} .btn{width:56px;height:56px} }
 </style>
 </head>
 <body>
 
-<canvas id="gameCanvas" width="480" height="320"></canvas>
+<div id="container" role="application" aria-label="Gioco Giacomo">
+  <canvas id="c"></canvas>
+
+  <div class="topbar" aria-hidden="true">
+    <div class="stat">🍌 <span id="uiLives">3</span></div>
+    <div class="stat">⭐ <span id="uiScore">0</span> &nbsp; 💋 <span id="uiKiss">0</span></div>
+    <div class="stat">⏱ <span id="uiTime">0</span>s</div>
+  </div>
+
+  <div class="controls" aria-hidden="true">Comandi: ← → = muovi • ↑ / Space = salta • Tap = salta</div>
+
+  <div class="touch" aria-hidden="true">
+    <div class="btn" id="leftBtn">◀</div>
+    <div class="btn" id="jumpBtn">⬆</div>
+    <div class="btn" id="rightBtn">▶</div>
+  </div>
+
+  <!-- Start overlay -->
+  <div class="overlay" id="startOverlay">
+    <div class="panel">
+      <div class="title">GIACOMO: VERSO LA SPIAGGIA</div>
+      <div class="small">Raccogli banane per vite • Schiva tasse, orologi e lavoro • Prendi la tavola e surf!</div>
+      <button id="startBtn" class="big">START</button>
+    </div>
+  </div>
+
+  <!-- End overlay -->
+  <div class="overlay" id="endOverlay" style="display:none">
+    <div class="panel">
+      <div id="endText" style="font-weight:900;color:#b22222;margin-bottom:8px"></div>
+      <button id="retryBtn" class="big">RIPROVA</button>
+    </div>
+  </div>
+
+</div>
 
 <script>
-// Gioco Platform semplice con Giacomo e gli elementi richiesti
+/* -------------------------
+   Gioco Canvas - versione interna minima ma completa
+   - Tutte le figure sono disegnate con canvas (cartone)
+   - Scorrimento orizzontale (camera)
+   - Piattaforme saltabili
+   - Banane con forma banana
+   - Orologi più grandi
+   - Nemici tasse con giacca e valigetta
+   - Ragazza castana con cuore
+   - Tavola da surf obiettivo
+   - Touch + tastiera
+   - Musica tramite WebAudio (parte al Start)
+   ------------------------- */
 
-(() => {
-  const canvas = document.getElementById("gameCanvas");
-  const ctx = canvas.getContext("2d");
-  const width = canvas.width;
-  const height = canvas.height;
+(function(){
+  // canvas responsive
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const wrap = document.getElementById('container');
+  let DPR = window.devicePixelRatio || 1;
 
-  // Caratteristiche personaggi e oggetti
-  const gravity = 0.8;
-  let gameOver = false;
-  let lives = 3;
-  let bananasCollected = 0;
-  let message = "";
-
-  // Suoni base
-  const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-
-  function playBeep(freq, duration = 200) {
-    const osc = audioContext.createOscillator();
-    const gainNode = audioContext.createGain();
-    osc.connect(gainNode);
-    gainNode.connect(audioContext.destination);
-    osc.frequency.value = freq;
-    osc.type = "square";
-    osc.start();
-    gainNode.gain.setValueAtTime(0.2, audioContext.currentTime);
-    gainNode.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + duration / 1000);
-    osc.stop(audioContext.currentTime + duration / 1000);
+  function resize(){
+    const W = wrap.clientWidth;
+    const H = wrap.clientHeight;
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    canvas.width = Math.floor(W * DPR);
+    canvas.height = Math.floor(H * DPR);
+    ctx.setTransform(DPR,0,0,DPR,0,0);
   }
+  window.addEventListener('resize', resize);
+  resize();
 
-  // Suono bacio (più basso e corto)
-  function playKiss() {
-    playBeep(450, 150);
-  }
-  // Suono banana (più alto)
-  function playBanana() {
-    playBeep(700, 200);
-  }
-  // Suono yeah (vincita)
-  function playYeah() {
-    playBeep(900, 400);
-  }
+  // UI
+  const uiLives = document.getElementById('uiLives');
+  const uiScore = document.getElementById('uiScore');
+  const uiKiss  = document.getElementById('uiKiss');
+  const uiTime  = document.getElementById('uiTime');
+  const startOverlay = document.getElementById('startOverlay');
+  const startBtn = document.getElementById('startBtn');
+  const endOverlay = document.getElementById('endOverlay');
+  const retryBtn = document.getElementById('retryBtn');
+  const endText = document.getElementById('endText');
 
-  // Player (Giacomo)
+  const leftBtn = document.getElementById('leftBtn');
+  const rightBtn = document.getElementById('rightBtn');
+  const jumpBtn = document.getElementById('jumpBtn');
+
+  // Audio setup - WebAudio synths (no external files)
+  let audioCtx = null;
+  let bgmGain = null;
+  let bgmTimer = null;
+  let isMuted = false;
+  function initAudio(){
+    if (audioCtx) return;
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    bgmGain = audioCtx.createGain(); bgmGain.gain.value = 0.12; bgmGain.connect(audioCtx.destination);
+  }
+  function sfx(freq, time=0.12, type='square', vol=0.4){
+    if (!audioCtx) return;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = type; o.frequency.value = freq;
+    o.connect(g); g.connect(audioCtx.destination);
+    g.gain.setValueAtTime(vol, audioCtx.currentTime);
+    o.start(); o.stop(audioCtx.currentTime + time);
+    g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + time);
+  }
+  function playBGM(){
+    if (!audioCtx) return;
+    clearInterval(bgmTimer);
+    const tune = [440, 523.25, 659.25, 880];
+    let i=0;
+    bgmTimer = setInterval(()=>{
+      if (isMuted) return;
+      const f = tune[i % tune.length];
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.type = 'sine'; o.frequency.value = f;
+      o.connect(g); g.connect(bgmGain);
+      g.gain.setValueAtTime(0.14, audioCtx.currentTime);
+      o.start(); o.stop(audioCtx.currentTime + 0.28);
+      i++;
+    }, 300);
+  }
+  function stopBGM(){ if (bgmTimer) { clearInterval(bgmTimer); bgmTimer = null; } }
+
+  // Game state
+  let running = false;
+  let timePlay = 0;
+
+  // Camera & world
+  let cameraX = 0;
+
+  // Player Giacomo (costume giallo)
   const player = {
-    x: 50,
-    y: height - 90,
-    width: 30,
-    height: 60,
-    vy: 0,
-    jumping: false,
-    color: "#000",
-    draw() {
-      // corpo semplice stilizzato
-      ctx.fillStyle = this.color;
-      // testa calva (cerchio)
-      ctx.beginPath();
-      ctx.arc(this.x + this.width/2, this.y + 15, 15, 0, Math.PI * 2);
-      ctx.fillStyle = "#f0c8a0";
-      ctx.fill();
-      // corpo magro (rettangolo)
-      ctx.fillStyle = "#000";
-      ctx.fillRect(this.x + 10, this.y + 30, 10, 30);
+    x: 60, y: 0, w:36, h:72, vx:0, vy:0, speed:3.2, onGround:false, lives:3, score:0, kisses:0,
+    draw(ctx){
+      ctx.save(); ctx.translate(this.x, this.y);
+      // legs
+      ctx.fillStyle = '#0b5aa6';
+      roundRect(ctx,6,this.h-14,8,14,3);
+      roundRect(ctx,this.w-14,this.h-14,8,14,3);
+      // torso
+      ctx.fillStyle = '#1f497d';
+      roundRect(ctx,0,26,this.w,28,6);
+      // yellow shorts
+      ctx.fillStyle = '#ffd54f';
+      ctx.fillRect(6,this.h-26,this.w-12,10);
+      // arms
+      ctx.fillStyle = '#f0c8a0';
+      ctx.fillRect(-8,34,12,8);
+      ctx.fillRect(this.w-4,34,12,8);
+      // head (calvo)
+      ctx.fillStyle = '#f0c8a0';
+      ctx.beginPath(); ctx.ellipse(this.w/2,12,14,16,0,0,Math.PI*2); ctx.fill();
+      // eyes
+      ctx.fillStyle='#000'; ctx.beginPath(); ctx.ellipse(10,8,2.8,3.6,0,0,Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(22,8,2.8,3.6,0,0,Math.PI*2); ctx.fill();
+      // mouth
+      ctx.strokeStyle='#8b4b2b'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(10,18); ctx.quadraticCurveTo(18,22,26,18); ctx.stroke();
+      ctx.restore();
     },
-    update() {
-      this.vy += gravity;
-      this.y += this.vy;
-      if (this.y + this.height > height - 20) { // terreno
-        this.y = height - 20 - this.height;
-        this.vy = 0;
-        this.jumping = false;
-      }
-    },
-    jump() {
-      if (!this.jumping) {
-        this.vy = -15;
-        this.jumping = true;
-      }
-    },
-    getRect() {
-      return {x: this.x, y: this.y, width: this.width, height: this.height};
-    }
+    rect(){ return {x:this.x,y:this.y,width:this.w,height:this.h}; }
   };
 
-  // Nemici: bollette e tasse (persone che chiedono soldi)
-  class Enemy {
-    constructor(x, y, text) {
-      this.x = x;
-      this.y = y;
-      this.width = 40;
-      this.height = 50;
-      this.speed = 2;
-      this.text = text;
-      this.color = "#c0392b";
-    }
-    draw() {
-      ctx.fillStyle = this.color;
-      ctx.fillRect(this.x, this.y, this.width, this.height);
-      ctx.fillStyle = "#fff";
-      ctx.font = "bold 12px Comic Sans MS";
-      ctx.fillText(this.text, this.x + 5, this.y + 30);
-    }
-    update() {
-      this.x -= this.speed;
-      if (this.x + this.width < 0) {
-        this.x = width + Math.random() * 200;
+  // Helper draw primitives
+  function roundRect(ctx,x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); ctx.fill(); }
+
+  // Platforms
+  let platforms = [];
+  // Bananas
+  let bananas = [];
+  // Enemies (tasse)
+  let enemies = [];
+  // Clocks (big)
+  let clocks = [];
+  // Girl
+  let girl = null;
+  // Surf
+  let surf = null;
+
+  function placeLevel(){
+    const W = wrap.clientWidth;
+    const H = wrap.clientHeight;
+    platforms = [];
+    bananas = [];
+    enemies = [];
+    clocks = [];
+    // ground platforms and stepping stones
+    for (let i=0;i<24;i++){
+      const px = 120 + i*220;
+      const py = H - (Math.random()*80 + 120) - (i%3)*12;
+      platforms.push({x:px,y:py,w:120,h:16});
+      // sometimes add banana above
+      if (i%2===0){
+        bananas.push({x:px+40, y:py-40, w:22,h:30, taken:false});
+      }
+      // enemies occasionally
+      if (i%5===0){
+        enemies.push({x:px+80, y:py-48, w:40,h:54, vx:1.2, label:(i%10===0?'BOL':'TAX')});
+      }
+      // clocks
+      if (i%7===0){
+        clocks.push({x:px+140, y:py-60, w:44,h:44, vx:2});
       }
     }
-    getRect() {
-      return {x: this.x, y: this.y, width: this.width, height: this.height};
-    }
+    // place girl and surf further
+    girl = {x: platforms[platforms.length-3].x + 30, y: platforms[platforms.length-3].y - 66, w:36,h:66, kissed:false};
+    surf = {x: platforms[platforms.length-1].x + 260, y: platforms[platforms.length-1].y - 22, w:64,h:24, taken:false};
+    // reset player
+    player.x = 60; player.y = wrap.clientHeight - 180; player.vx=0; player.vy=0; player.onGround=false;
+    player.lives = 3; player.score = 0; player.kisses = 0;
+    cameraX = 0; timePlay = 0;
+    updateUI();
   }
 
-  // Orologi da schivare (perde vite se li tocca)
-  class Clock {
-    constructor(x, y) {
-      this.x = x;
-      this.y = y;
-      this.width = 30;
-      this.height = 30;
-      this.speed = 3;
-      this.color = "#2980b9";
-    }
-    draw() {
-      ctx.fillStyle = this.color;
-      ctx.beginPath();
-      ctx.arc(this.x + this.width/2, this.y + this.height/2, 15, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#fff";
-      ctx.font = "16px Comic Sans MS";
-      ctx.fillText("⏰", this.x + 7, this.y + 22);
-    }
-    update() {
-      this.x -= this.speed;
-      if (this.x + this.width < 0) {
-        this.x = width + Math.random() * 300;
-        this.y = 50 + Math.random() * (height - 100);
-      }
-    }
-    getRect() {
-      return {x: this.x, y: this.y, width: this.width, height: this.height};
-    }
+  function updateUI(){
+    uiLives.textContent = player.lives;
+    uiScore.textContent = player.score;
+    uiKiss.textContent = player.kisses;
+    uiTime.textContent = Math.floor(timePlay);
   }
 
-  // Banane da raccogliere per vite
-  class Banana {
-    constructor(x, y) {
-      this.x = x;
-      this.y = y;
-      this.width = 20;
-      this.height = 30;
-      this.collected = false;
-      this.color = "#f1c40f";
-    }
-    draw() {
-      if (this.collected) return;
-      ctx.fillStyle = this.color;
-      ctx.beginPath();
-      ctx.moveTo(this.x, this.y + 15);
-      ctx.quadraticCurveTo(this.x + 10, this.y - 5, this.x + 20, this.y + 15);
-      ctx.quadraticCurveTo(this.x + 10, this.y + 35, this.x, this.y + 15);
-      ctx.fill();
-      ctx.strokeStyle = "#b7950b";
-      ctx.stroke();
-    }
-    getRect() {
-      return {x: this.x, y: this.y, width: this.width, height: this.height};
-    }
+  // Input
+  const keys = {left:false,right:false,jump:false};
+  window.addEventListener('keydown', e=>{
+    if (e.code==='ArrowLeft') keys.left=true;
+    if (e.code==='ArrowRight') keys.right=true;
+    if (e.code==='ArrowUp' || e.code==='Space') keys.jump=true;
+  });
+  window.addEventListener('keyup', e=>{
+    if (e.code==='ArrowLeft') keys.left=false;
+    if (e.code==='ArrowRight') keys.right=false;
+    if (e.code==='ArrowUp' || e.code==='Space') keys.jump=false;
+  });
+
+  // touch buttons
+  leftBtn.addEventListener('touchstart', e=>{ e.preventDefault(); keys.left=true;}, {passive:false});
+  leftBtn.addEventListener('touchend', e=>{ e.preventDefault(); keys.left=false;}, {passive:false});
+  rightBtn.addEventListener('touchstart', e=>{ e.preventDefault(); keys.right=true;}, {passive:false});
+  rightBtn.addEventListener('touchend', e=>{ e.preventDefault(); keys.right=false;}, {passive:false});
+  jumpBtn.addEventListener('touchstart', e=>{ e.preventDefault(); keys.jump=true;}, {passive:false});
+  jumpBtn.addEventListener('touchend', e=>{ e.preventDefault(); keys.jump=false;}, {passive:false});
+
+  // canvas tap => jump or restart
+  canvas.addEventListener('touchstart', e=>{
+    e.preventDefault();
+    if (!running) { startBtn.click(); return; }
+    keys.jump = true;
+  }, {passive:false});
+  canvas.addEventListener('touchend', e=>{ keys.jump=false; }, {passive:false});
+
+  // collisions
+  function rectsOverlap(a,b){ return !(a.x + a.width < b.x || a.x > b.x + b.width || a.y + a.height < b.y || a.y > b.y + b.height); }
+  function hit(a,b){ return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y; }
+
+  // game logic loop
+  let last = performance.now();
+  function loop(now=performance.now()){
+    if (!running) return;
+    const dt = Math.min(40, now - last);
+    last = now;
+    timePlay += dt/1000;
+    update(dt/16);
+    render();
+    updateUI();
+    requestAnimationFrame(loop);
   }
 
-  // Ragazza castana con cuore (dà potere extra)
-  class Girl {
-    constructor(x, y) {
-      this.x = x;
-      this.y = y;
-      this.width = 30;
-      this.height = 60;
-      this.collected = false;
-    }
-    draw() {
-      if (this.collected) return;
-      // capelli lunghi castani
-      ctx.fillStyle = "#5d3a1a";
-      ctx.beginPath();
-      ctx.ellipse(this.x + this.width/2, this.y + 25, 12, 25, 0, 0, Math.PI*2);
-      ctx.fill();
-      // corpo rosa
-      ctx.fillStyle = "#d24d57";
-      ctx.fillRect(this.x + 10, this.y + 30, 10, 30);
-      // cuore sopra
-      ctx.fillStyle = "red";
-      ctx.font = "20px Comic Sans MS";
-      ctx.fillText("❤️", this.x + 5, this.y + 20);
-    }
-    getRect() {
-      return {x: this.x, y: this.y, width: this.width, height: this.height};
-    }
-  }
+  function update(step){
+    // input horizontal
+    const p = player;
+    let mv = 0;
+    if (keys.left) mv -= p.speed;
+    if (keys.right) mv += p.speed;
+    p.vx = mv;
 
-  // Tavola da surf (obiettivo finale)
-  class Surfboard {
-    constructor(x, y) {
-      this.x = x;
-      this.y = y;
-      this.width = 60;
-      this.height = 20;
-      this.collected = false;
-    }
-    draw() {
-      if (this.collected) return;
-      ctx.fillStyle = "#27ae60";
-      ctx.beginPath();
-      ctx.moveTo(this.x, this.y + 10);
-      ctx.quadraticCurveTo(this.x + 30, this.y - 15, this.x + 60, this.y + 10);
-      ctx.quadraticCurveTo(this.x + 30, this.y + 35, this.x, this.y + 10);
-      ctx.fill();
-    }
-    getRect() {
-      return {x: this.x, y: this.y, width: this.width, height: this.height};
-    }
-  }
+    // jump
+    if (keys.jump && p.onGround){ p.vy = -12; p.onGround=false; sfx(700,0.08); keys.jump=false; }
 
-  // Funzione di collisione rettangolare semplice
-  function rectsCollide(r1, r2) {
-    return !(
-      r2.x > r1.x + r1.width ||
-      r2.x + r2.width < r1.x ||
-      r2.y > r1.y + r1.height ||
-      r2.y + r2.height < r1.y
-    );
-  }
+    // physics
+    p.vy += 0.7;
+    p.x += p.vx;
+    p.y += p.vy;
 
-  // Creazione elementi di gioco
-  const enemies = [
-    new Enemy(500, height - 70, "Bollette"),
-    new Enemy(700, height - 70, "Tasse"),
-    new Enemy(900, height - 70, "Lavoro"),
-  ];
-  const clocks = [
-    new Clock(600, 50),
-    new Clock(850, 100)
-  ];
-  const bananas = [
-    new Banana(150, height - 50),
-    new Banana(400, height - 50),
-    new Banana(650, height - 50),
-  ];
-  const girl = new Girl(1100, height - 90);
-  const surfboard = new Surfboard(1300, height - 40);
+    // collision with platforms (basic)
+    p.onGround = false;
+    const groundY = wrap.clientHeight - 100;
+    if (p.y + p.h > groundY){ p.y = groundY - p.h; p.vy = 0; p.onGround=true; }
 
-  // Disegna il terreno semplice
-  function drawGround() {
-    ctx.fillStyle = "#2ecc71";
-    ctx.fillRect(0, height - 20, width, 20);
-  }
-
-  // Messaggi di testo
-  function drawMessage() {
-    ctx.fillStyle = "black";
-    ctx.font = "20px Comic Sans MS";
-    ctx.textAlign = "center";
-    ctx.fillText(message, width / 2, 50);
-    ctx.textAlign = "left";
-  }
-
-  // Disegno e aggiornamento tutto
-  function gameLoop() {
-    ctx.clearRect(0, 0, width, height);
-
-    drawGround();
-
-    player.update();
-    player.draw();
-
-    enemies.forEach(e => {
-      e.update();
-      e.draw();
-      if (!gameOver && rectsCollide(player.getRect(), e.getRect())) {
-        gameOver = true;
-        message = "Game over: ti è finita una banana tra le chiappe!";
-      }
-    });
-
-    clocks.forEach(c => {
-      c.update();
-      c.draw();
-      if (!gameOver && rectsCollide(player.getRect(), c.getRect())) {
-        lives--;
-        playBanana(); // suono perdita vita
-        if (lives <= 0) {
-          gameOver = true;
-          message = "Game over: ti è finita una banana tra le chiappe!";
+    platforms.forEach(pl=>{
+      // platform bounds
+      if (p.x + p.w > pl.x - 4 && p.x < pl.x + pl.w + 4){
+        if (p.y + p.h > pl.y && p.y + p.h < pl.y + 24 && p.vy >= 0){
+          p.y = pl.y - p.h; p.vy = 0; p.onGround = true;
         }
       }
     });
 
-    bananas.forEach(b => {
-      b.draw();
-      if (!b.collected && !gameOver && rectsCollide(player.getRect(), b.getRect())) {
-        b.collected = true;
-        lives++;
-        bananasCollected++;
-        playBanana();
+    // camera follows
+    const center = wrap.clientWidth * 0.35;
+    if (p.x - cameraX > center) cameraX = p.x - center;
+
+    // enemies movement & collision
+    enemies.forEach(en=>{
+      en.x -= en.vx;
+      if (en.x + en.w < cameraX - 200) en.x = cameraX + rand(600,1200);
+      if (hit({x:p.x,y:p.y,w:p.w,h:p.h}, en)){
+        // hit: lose life and push back
+        sfx(220,0.12);
+        en.x += 160;
+        p.lives--; if (p.lives<=0) end(false);
       }
     });
 
-    if (!girl.collected && !gameOver && rectsCollide(player.getRect(), girl.getRect())) {
-      girl.collected = true;
-      playKiss();
-      message = "Hai preso un bacio! Potere extra attivato!";
-    }
-
-    if (!surfboard.collected && !gameOver && rectsCollide(player.getRect(), surfboard.getRect())) {
-      surfboard.collected = true;
-      playYeah();
-      message = "Sei arrivato alla spiaggia! Surfa!";
-      gameOver = true;
-    }
-
-    drawMessage();
-
-    // Vite (banane raccolte)
-    ctx.fillStyle = "#f1c40f";
-    ctx.font = "16px Comic Sans MS";
-    ctx.fillText(`Vite: ${lives}`, 10, 25);
-
-    if (!gameOver) requestAnimationFrame(gameLoop);
-  }
-
-  // Reset gioco
-  function resetGame() {
-    lives = 3;
-    bananasCollected = 0;
-    message = "";
-    gameOver = false;
-
-    bananas.forEach(b => b.collected = false);
-    girl.collected = false;
-    surfboard.collected = false;
-
-    enemies.forEach(e => e.x = width + Math.random() * 300);
-    clocks.forEach(c => {
-      c.x = width + Math.random() * 300;
-      c.y = 50 + Math.random() * (height - 100);
+    // clocks
+    clocks.forEach(cl=>{
+      cl.x -= cl.vx;
+      if (cl.x + cl.w < cameraX - 200) cl.x = cameraX + rand(400,1400);
+      if (hit({x:p.x,y:p.y,w:p.w,h:p.h}, cl)){
+        sfx(300,0.12); p.lives--; cl.x += 200; if (p.lives<=0) end(false);
+      }
     });
 
-    player.x = 50;
-    player.y = height - 90;
-    player.vy = 0;
-    player.jumping = false;
+    // bananas
+    bananas.forEach(b=>{
+      if (!b.taken && hit({x:p.x,y:p.y,w:p.w,h:p.h}, {x:b.x,y:b.y,w:b.w,h:b.h})){
+        b.taken = true; p.lives++; p.score++; sfx(880,0.12);
+      }
+    });
 
-    gameLoop();
+    // girl
+    if (girl && !girl.kissed && hit({x:p.x,y:p.y,w:p.w,h:p.h}, {x:girl.x,y:girl.y,w:girl.w,h:girl.h})){
+      girl.kissed = true; p.kisses++; p.lives++; sfx(620,0.12);
+      // invincibility
+      p.invUntil = performance.now() + 6000;
+    }
+
+    // surf
+    if (surf && !surf.taken && hit({x:p.x,y:p.y,w:p.w,h:p.h}, {x:surf.x,y:surf.y,w:surf.w,h:surf.h})){
+      surf.taken = true; sfx(1200,0.2); end(true);
+    }
   }
 
-  // Controllo touch per saltare o restart
-  canvas.addEventListener('touchstart', (e) => {
-    e.preventDefault();
-    if (!gameOver) player.jump();
-    else resetGame();
+  // render
+  function render(){
+    const W = wrap.clientWidth; const H = wrap.clientHeight;
+    ctx.clearRect(0,0,W,H);
+
+    // background gradient
+    const g = ctx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0,'#cfefff'); g.addColorStop(1,'#eaf9ff');
+    ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+
+    // fixed clouds
+    ctx.fillStyle = '#fff';
+    drawCloud(ctx, W*0.12 - cameraX*0.02, H*0.12, 60);
+    drawCloud(ctx, W*0.6 - cameraX*0.015, H*0.08, 46);
+    drawCloud(ctx, W*0.78 - cameraX*0.01, H*0.18, 36);
+
+    // ground
+    ctx.fillStyle = '#f5d591'; ctx.fillRect(0,H-100,W,100);
+    ctx.fillStyle = '#2e6fb2'; ctx.fillRect(0,H-100,W,20);
+
+    ctx.save(); ctx.translate(-cameraX,0);
+
+    // platforms
+    ctx.fillStyle = '#3cb371';
+    platforms.forEach(pl => { roundRect(ctx, pl.x, pl.y, pl.w, pl.h, 6); });
+
+    // bananas (banana shape)
+    bananas.forEach(b=>{
+      if (!b.taken){
+        drawBanana(ctx, b.x, b.y, b.w, b.h);
+      }
+    });
+
+    // clocks larger
+    clocks.forEach(c=>{
+      ctx.save(); ctx.translate(c.x, c.y);
+      ctx.fillStyle = '#fff2b8'; ctx.beginPath(); ctx.arc(22,22,20,0,Math.PI*2); ctx.fill();
+      ctx.strokeStyle='#2980b9'; ctx.lineWidth=3; ctx.stroke();
+      ctx.fillStyle='#2980b9'; ctx.font='16px Arial'; ctx.fillText('⏰',8,26);
+      ctx.restore();
+    });
+
+    // enemies (tasse) - jacket + briefcase
+    enemies.forEach(e=>{
+      ctx.save(); ctx.translate(e.x, e.y);
+      // jacket
+      ctx.fillStyle = '#4b5563'; roundRect(ctx,0,12,e.w,42,6);
+      // head
+      ctx.fillStyle = '#f1d6c2'; ctx.beginPath(); ctx.ellipse(e.w/2,6,12,12,0,0,Math.PI*2); ctx.fill();
+      // briefcase
+      ctx.fillStyle='#222'; ctx.fillRect(e.w-16,28,14,10);
+      // arms
+      ctx.fillStyle='#f1d6c2'; ctx.fillRect(-6,26,10,8); ctx.fillRect(e.w-4,26,12,8);
+      ctx.restore();
+    });
+
+    // girl
+    if (girl && !girl.kissed){
+      ctx.save(); ctx.translate(girl.x, girl.y);
+      ctx.fillStyle='#6b4226'; ctx.fillRect(0,0,girl.w,girl.h); // hair
+      ctx.fillStyle='#f5d6c6'; ctx.beginPath(); ctx.ellipse(girl.w/2,18,10,12,0,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='#ff5b84'; ctx.font='20px Arial'; ctx.fillText('❤',girl.w/2 - 8, -4);
+      ctx.restore();
+    }
+
+    // surfboard (goal)
+    if (!surf.taken){
+      ctx.save(); ctx.translate(surf.x, surf.y);
+      ctx.fillStyle = '#ffcc66'; ctx.beginPath(); ctx.ellipse(surf.w/2,surf.h/2,surf.w/2,surf.h/2,0,0,Math.PI*2); ctx.fill();
+      ctx.strokeStyle = '#ff9f4d'; ctx.lineWidth=2; ctx.stroke();
+      ctx.restore();
+    }
+
+    // player
+    player.draw(ctx);
+
+    ctx.restore();
+
+    // HUD drawn by DOM; nothing more here
+  }
+
+  // helpers
+  function drawCloud(ctx,x,y,size){
+    ctx.beginPath(); ctx.ellipse(x,y,size*0.7,size*0.5,0,0,Math.PI*2); ctx.ellipse(x+size*0.5,y+6,size*0.6,size*0.45,0,0,Math.PI*2); ctx.ellipse(x-size*0.4,y+4,size*0.5,size*0.35,0,0,Math.PI*2); ctx.fill();
+  }
+
+  function drawBanana(ctx,x,y,w,h){
+    ctx.save(); ctx.translate(x,y);
+    ctx.fillStyle = '#ffd54f';
+    ctx.beginPath();
+    ctx.moveTo(0,h/2);
+    ctx.quadraticCurveTo(w/2,-h/2, w, h/2);
+    ctx.quadraticCurveTo(w/2,h*1.6,0,h/2);
+    ctx.fill();
+    ctx.strokeStyle = '#a76d14'; ctx.lineWidth=2; ctx.stroke();
+    ctx.restore();
+  }
+
+  // start / end handlers
+  startBtn.addEventListener('click', ()=>{
+    startOverlay.style.display = 'none';
+    initAudio(); playBGM();
+    running = true;
+    placeLevel();
+    last = performance.now();
+    loop();
   });
 
-  resetGame();
+  retryBtn.addEventListener('click', ()=>{
+    endOverlay.style.display = 'none';
+    startOverlay.style.display = 'none';
+    initAudio(); playBGM();
+    running = true;
+    placeLevel();
+    last = performance.now();
+    loop();
+  });
 
-})();
+  function end(win){
+    running = false;
+    stopBGM();
+    endOverlay.style.display = 'flex';
+    endText.textContent = win ? "CE L'HAI FATTA! Giacomo in spiaggia 🏖️" : "Game over: ti è finita una banana tra le chiappe!";
+  }
+
+  // Expose small debug
+  window.GG = {placeLevel, player, platforms, bananas, enemies, clocks, girl, surf};
+
+  // initial draw
+  render();
+
+})(); // end IIFE
 </script>
 
 </body>
